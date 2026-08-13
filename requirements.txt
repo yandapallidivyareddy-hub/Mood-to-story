@@ -7,3 +7,4 @@ langserve
 google-genai
 pydantic
 python-dotenv
+sse-starlette
