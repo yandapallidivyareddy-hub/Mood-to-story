@@ -426,7 +426,6 @@ add_routes(app, chain, path="/agent")
 @app.get("/health")
 def health():
     return {"status":"healthy"}
-add_routes(app,chain,path="/agent")
 
 @app.get("/health")
 def health(): return {"status":"healthy"}
