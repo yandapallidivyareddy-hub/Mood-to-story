@@ -7,4 +7,5 @@ langserve
 google-genai
 pydantic
 python-dotenv
+python-multipart
 sse-starlette
