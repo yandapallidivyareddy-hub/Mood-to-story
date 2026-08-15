@@ -1,1017 +1,419 @@
 import os
-import re
 import base64
 import html
+import traceback
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from google import genai
 from google.genai import types
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-if not GOOGLE_API_KEY:
-    raise RuntimeError(
-        "GOOGLE_API_KEY environment variable is not set."
-    )
-
-
-# Gemini client
-client = genai.Client(api_key=GOOGLE_API_KEY)
-
-
-# ============================================================
-# FASTAPI
-# ============================================================
+# =========================================================
+# APP
+# =========================================================
 
 app = FastAPI(
     title="Mood-to-Story AI",
-    description="Create mood-based illustrated stories using Gemini."
+    description="Generate magical stories and illustrations with Gemini"
 )
 
 
-# ============================================================
-# MOOD CONFIGURATION
-# ============================================================
+# =========================================================
+# GEMINI CLIENT
+# =========================================================
 
-MOOD_CONFIG = {
+API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-    "Happy": {
-        "emoji": "😊",
-        "tone": (
-            "joyful, bright, playful, warm, positive, "
-            "hopeful and full of wonder"
-        ),
-        "visual": (
-            "warm sunlight, bright colors, smiling characters, "
-            "magical glowing atmosphere"
-        )
-    },
+if not API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY or GOOGLE_API_KEY is not configured in Render."
+    )
 
-    "Sad": {
-        "emoji": "😢",
-        "tone": (
-            "gentle, emotional, thoughtful and touching, "
-            "but ending with hope"
-        ),
-        "visual": (
-            "soft blue tones, gentle rain, emotional atmosphere, "
-            "warm light appearing at the end"
-        )
-    },
-
-    "Excited": {
-        "emoji": "🤩",
-        "tone": (
-            "energetic, thrilling, adventurous, fast-moving "
-            "and full of surprises"
-        ),
-        "visual": (
-            "dynamic action, bright colors, magical sparks, "
-            "dramatic movement"
-        )
-    },
-
-    "Peaceful": {
-        "emoji": "😌",
-        "tone": (
-            "calm, relaxing, gentle, comforting and beautiful"
-        ),
-        "visual": (
-            "soft sunlight, pastel colors, peaceful landscape, "
-            "gentle clouds and calm atmosphere"
-        )
-    },
-
-    "Romantic": {
-        "emoji": "❤️",
-        "tone": (
-            "warm, sweet, emotional, caring and hopeful"
-        ),
-        "visual": (
-            "soft sunset, warm golden light, flowers, "
-            "gentle magical atmosphere"
-        )
-    },
-
-    "Mysterious": {
-        "emoji": "🔮",
-        "tone": (
-            "curious, mysterious, suspenseful and magical"
-        ),
-        "visual": (
-            "moonlight, glowing objects, mysterious shadows, "
-            "ancient places and magical atmosphere"
-        )
-    },
-
-    "Scared": {
-        "emoji": "😨",
-        "tone": (
-            "slightly spooky, suspenseful and mysterious, "
-            "but suitable for young readers and ending safely"
-        ),
-        "visual": (
-            "dark blue night, mist, mysterious shadows, "
-            "glowing lights and safe magical fantasy"
-        )
-    },
-
-    "Angry": {
-        "emoji": "😡",
-        "tone": (
-            "intense, emotional and energetic, showing conflict "
-            "that is solved in a positive way"
-        ),
-        "visual": (
-            "dramatic sky, strong lighting, energetic movement, "
-            "red and orange magical effects"
-        )
-    },
-
-    "Hopeful": {
-        "emoji": "🌱",
-        "tone": (
-            "inspiring, positive, emotional and full of hope"
-        ),
-        "visual": (
-            "sunrise, golden light, growing plants, "
-            "bright sky and uplifting atmosphere"
-        )
-    },
-
-    "Adventurous": {
-        "emoji": "⚔️",
-        "tone": (
-            "brave, exciting, imaginative and full of discovery"
-        ),
-        "visual": (
-            "fantasy landscapes, mountains, magical paths, "
-            "adventure and exploration"
-        )
-    }
-}
+client = genai.Client(api_key=API_KEY)
 
 
-# ============================================================
+# =========================================================
+# MODELS
+# =========================================================
+
+# Text model
+TEXT_MODEL = "gemini-3.5-flash"
+
+# Image model
+IMAGE_MODEL = "gemini-3.1-flash-image"
+
+
+# =========================================================
+# REQUEST MODEL
+# =========================================================
+
+class StoryRequest(BaseModel):
+    mood: str = "Happy"
+    genre: str = "Fantasy"
+    style: str = "Cinematic Storybook"
+    idea: str = ""
+
+
+# =========================================================
 # STORY GENERATION
-# ============================================================
+# =========================================================
 
 def make_story(mood: str, genre: str, idea: str):
 
-    config = MOOD_CONFIG.get(
-        mood,
-        MOOD_CONFIG["Happy"]
-    )
-
-    tone = config["tone"]
-
-    if not idea.strip():
-        idea = (
-            "Create an original story based on the selected "
-            "mood and genre."
-        )
-
     prompt = f"""
-You are a professional children's story writer.
+You are a children's story writer.
 
-Create a beautiful original {genre} story.
+Create a magical short story based on:
 
-SELECTED MOOD:
-{mood}
+Mood: {mood}
+Genre: {genre}
+Story idea: {idea}
 
-EMOTIONAL TONE:
-{tone}
+IMPORTANT RULES:
 
-STORY IDEA:
-{idea}
-
-IMPORTANT WRITING RULES:
-
-1. Use VERY SIMPLE English.
-2. Use short and easy sentences.
-3. Avoid difficult words.
-4. Write for students around 10-14 years old.
-5. Make the story imaginative and enjoyable.
-6. The selected mood must be clearly felt throughout the story.
-7. Include a clear beginning, middle and ending.
-8. Use vivid scenes that can easily be illustrated.
-9. Do not mention AI.
-10. Do not use complicated vocabulary.
-11. Write approximately 400-500 words.
-
-Return ONLY this format:
-
-TITLE: <short creative title>
-
-STORY:
-<story paragraphs>
+- Use very simple English.
+- Use short and clear sentences.
+- Make the story suitable for students and children.
+- Do not use complicated vocabulary.
+- Create a clear beginning, middle and ending.
+- Make the story imaginative and emotional.
+- Include a positive ending.
+- Write around 600-800 words.
+- Give the story a beautiful title.
+- Do NOT include markdown symbols.
+- Do NOT include HTML.
 """
 
-    try:
-
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
-
-        # Google GenAI normally provides response.text
-        story_text = getattr(response, "text", None)
-
-        if not story_text:
-
-            # Fallback extraction
-            parts = []
-
-            if getattr(response, "candidates", None):
-
-                for candidate in response.candidates:
-
-                    content = getattr(
-                        candidate,
-                        "content",
-                        None
-                    )
-
-                    if content:
-
-                        for part in getattr(
-                            content,
-                            "parts",
-                            []
-                        ):
-
-                            text = getattr(
-                                part,
-                                "text",
-                                None
-                            )
-
-                            if text:
-                                parts.append(text)
-
-            story_text = "\n".join(parts)
-
-        if not story_text:
-            raise RuntimeError(
-                "Gemini returned an empty story."
-            )
-
-        return story_text.strip()
-
-    except Exception as e:
-
-        print(
-            "STORY GENERATION ERROR:",
-            repr(e)
-        )
-
-        raise RuntimeError(
-            f"Story generation failed: {str(e)}"
-        )
-
-
-# ============================================================
-# CLEAN STORY
-# ============================================================
-
-def clean_story(raw_story: str):
-
-    raw_story = raw_story.strip()
-
-    title = "Your Magical Story"
-
-    # Extract title
-    title_match = re.search(
-        r"TITLE\s*:\s*(.+?)(?:\n|$)",
-        raw_story,
-        re.IGNORECASE
+    response = client.models.generate_content(
+        model=TEXT_MODEL,
+        contents=prompt
     )
 
-    if title_match:
-
-        title = title_match.group(1).strip()
-
-        raw_story = re.sub(
-            r"TITLE\s*:\s*.+?(?:\n|$)",
-            "",
-            raw_story,
-            count=1,
-            flags=re.IGNORECASE
-        )
-
-    # Remove STORY label
-    raw_story = re.sub(
-        r"^\s*STORY\s*:\s*",
-        "",
-        raw_story,
-        flags=re.IGNORECASE
-    )
-
-    # Remove accidental markdown
-    raw_story = raw_story.replace(
-        "**",
-        ""
-    )
-
-    raw_story = raw_story.replace(
-        "*",
-        ""
-    )
-
-    raw_story = raw_story.replace(
-        "```",
-        ""
-    )
-
-    # Normalize excessive whitespace
-    raw_story = re.sub(
-        r"\n{3,}",
-        "\n\n",
-        raw_story
-    )
-
-    return title.strip(), raw_story.strip()
+    return response.text.strip()
 
 
-# ============================================================
+# =========================================================
 # IMAGE GENERATION
-# ============================================================
+# =========================================================
 
-def make_image(
-    story: str,
-    mood: str,
-    genre: str,
-    style: str
-):
-
-    config = MOOD_CONFIG.get(
-        mood,
-        MOOD_CONFIG["Happy"]
-    )
-
-    visual = config["visual"]
-
-    # Only use the beginning of the story so that the
-    # image prompt remains focused.
-    story_summary = story[:2500]
+def make_image(mood: str, genre: str, style: str, idea: str, story: str):
 
     image_prompt = f"""
-Create a beautiful illustrated storybook scene.
+Create a beautiful illustrated children's storybook scene.
 
-STORY:
-{story_summary}
+Story idea:
+{idea}
 
-MOOD:
+Mood:
 {mood}
 
-GENRE:
+Genre:
 {genre}
 
-VISUAL MOOD:
-{visual}
-
-ILLUSTRATION STYLE:
+Illustration style:
 {style}
 
-IMPORTANT:
+Story:
+{story[:4000]}
 
-- Create ONE main cinematic scene from the story.
-- Make the main character clearly visible.
-- Make the image colorful and detailed.
-- The image should feel like a children's storybook.
-- Keep the image family-friendly.
-- Do NOT put text, letters, captions or words inside the image.
-- Do NOT create a book cover.
-- Create an actual scene from the story.
-- Make the image visually magical and engaging.
+Create ONE main cinematic illustration that represents the most magical
+and important moment of the story.
+
+Requirements:
+
+- Children's storybook illustration
+- Beautiful fantasy atmosphere
+- Cinematic composition
+- Warm magical lighting
+- Rich details
+- Friendly and imaginative
+- Expressive characters
+- Suitable for children
+- No scary or disturbing elements
+- No text
+- No words
+- No letters
+- No watermark-like text
+- Landscape composition
+- 16:9 aspect ratio
 """
 
-    try:
-
-        print(
-            f"Generating image using "
-            f"gemini-3.1-flash-image..."
-        )
-
-        # Current Gemini image-generation API
-        interaction = client.interactions.create(
-            model="gemini-3.1-flash-image",
-            input=image_prompt
-        )
-
-        output_image = getattr(
-            interaction,
-            "output_image",
-            None
-        )
-
-        if not output_image:
-
-            raise RuntimeError(
-                "Gemini completed the request but "
-                "did not return an image."
+    response = client.models.generate_content(
+        model=IMAGE_MODEL,
+        contents=image_prompt,
+        config=types.GenerateContentConfig(
+            response_modalities=["TEXT", "IMAGE"],
+            image_config=types.ImageConfig(
+                aspect_ratio="16:9",
+                image_size="1K"
             )
+        )
+    )
 
-        image_data = getattr(
-            output_image,
-            "data",
-            None
+    image_data = None
+    image_mime = "image/png"
+
+    # Look through Gemini response parts
+    if response.candidates:
+
+        for candidate in response.candidates:
+
+            if not candidate.content:
+                continue
+
+            for part in candidate.content.parts:
+
+                # Image returned by Gemini
+                if getattr(part, "inline_data", None):
+
+                    image_data = part.inline_data.data
+
+                    if part.inline_data.mime_type:
+                        image_mime = part.inline_data.mime_type
+
+                    break
+
+            if image_data:
+                break
+
+    if not image_data:
+        raise RuntimeError(
+            "Gemini generated the story but did not return an image."
         )
 
-        if not image_data:
+    # Convert bytes to Base64 for browser
+    image_base64 = base64.b64encode(image_data).decode("utf-8")
 
-            raise RuntimeError(
-                "Gemini returned an image object "
-                "without image data."
-            )
-
-        # The Interactions API returns base64 image data
-        if isinstance(image_data, bytes):
-
-            encoded = base64.b64encode(
-                image_data
-            ).decode("utf-8")
-
-        else:
-
-            encoded = str(image_data)
-
-        print("IMAGE GENERATION SUCCESS")
-
-        return encoded, "image/png", None
-
-    except Exception as e:
-
-        error_message = str(e)
-
-        print(
-            "IMAGE GENERATION ERROR:",
-            repr(e)
-        )
-
-        return (
-            None,
-            None,
-            error_message
-        )
+    return {
+        "mime_type": image_mime,
+        "base64": image_base64
+    }
 
 
-# ============================================================
-# HTML
-# ============================================================
+# =========================================================
+# HOME PAGE
+# =========================================================
 
-HTML = r"""
+@app.get("/", response_class=HTMLResponse)
+def home():
+
+    return """
 <!DOCTYPE html>
-
-<html>
+<html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
 
 <title>Mood-to-Story AI</title>
 
-
 <style>
-
-/* =========================================================
-   GLOBAL
-========================================================= */
 
 * {
     box-sizing: border-box;
 }
 
 body {
-
     margin: 0;
-
-    font-family:
-        Inter,
-        Arial,
-        Helvetica,
-        sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
 
     background:
-        radial-gradient(
-            circle at top,
-            #243b64 0%,
-            #111827 45%,
-            #080d18 100%
-        );
+        radial-gradient(circle at top left, #243b70, transparent 40%),
+        radial-gradient(circle at bottom right, #14213d, transparent 40%),
+        #07152e;
 
-    color: #ffffff;
-
+    color: white;
     min-height: 100vh;
 }
 
-
-/* =========================================================
-   HEADER
-========================================================= */
-
-.header {
-
-    text-align: center;
-
-    padding: 45px 20px 25px;
-}
-
-.logo {
-
-    font-size: 48px;
-
-    margin-bottom: 8px;
-}
-
-.header h1 {
-
-    margin: 0;
-
-    font-size: 42px;
-
-    font-weight: 800;
-
-    background:
-        linear-gradient(
-            90deg,
-            #fbbf24,
-            #fde68a,
-            #f59e0b
-        );
-
-    -webkit-background-clip: text;
-
-    -webkit-text-fill-color: transparent;
-}
-
-.header p {
-
-    color: #cbd5e1;
-
-    font-size: 17px;
-
-    margin-top: 12px;
-}
-
-
-/* =========================================================
-   MAIN CONTAINER
-========================================================= */
-
 .container {
-
-    max-width: 1050px;
-
+    width: 92%;
+    max-width: 1100px;
     margin: auto;
-
-    padding: 20px;
+    padding: 40px 0;
 }
 
+.hero {
+    text-align: center;
+    margin-bottom: 35px;
+}
 
-/* =========================================================
-   CARD
-========================================================= */
+.hero-icon {
+    font-size: 55px;
+}
+
+h1 {
+    margin: 10px 0;
+    font-size: 42px;
+    color: #ffd43b;
+}
+
+.subtitle {
+    color: #d7def2;
+    font-size: 18px;
+}
 
 .card {
-
-    background:
-        rgba(31, 41, 55, 0.88);
-
-    border:
-        1px solid
-        rgba(255,255,255,0.08);
-
-    border-radius: 24px;
-
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 22px;
     padding: 30px;
-
-    box-shadow:
-        0 25px 70px
-        rgba(0,0,0,0.35);
-
-    backdrop-filter:
-        blur(12px);
-
-    margin-bottom: 25px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
 }
-
-
-/* =========================================================
-   FORM GRID
-========================================================= */
 
 .form-grid {
-
     display: grid;
-
-    grid-template-columns:
-        repeat(3, 1fr);
-
-    gap: 18px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
 }
-
-.field {
-
-    display: flex;
-
-    flex-direction: column;
-}
-
-.field.full {
-
-    grid-column:
-        1 / -1;
-}
-
 
 label {
-
-    font-weight: 700;
-
+    display: block;
     margin-bottom: 8px;
-
-    color: #f8fafc;
+    font-weight: bold;
+    color: #ffd43b;
 }
-
 
 select,
 textarea {
 
     width: 100%;
 
-    border: 1px solid
-        #475569;
-
-    background: #111827;
-
-    color: white;
-
-    padding: 14px 15px;
+    padding: 14px;
 
     border-radius: 12px;
 
-    outline: none;
+    border: 1px solid #40557f;
+
+    background: #101f3d;
+
+    color: white;
 
     font-size: 15px;
-
-    transition: 0.2s;
 }
-
-
-select:focus,
-textarea:focus {
-
-    border-color: #f59e0b;
-
-    box-shadow:
-        0 0 0 3px
-        rgba(245,158,11,0.15);
-}
-
 
 textarea {
-
     min-height: 120px;
-
     resize: vertical;
 }
 
+.full {
+    grid-column: 1 / -1;
+}
 
-/* =========================================================
-   BUTTON
-========================================================= */
-
-.generate-btn {
+button {
 
     width: 100%;
 
-    margin-top: 22px;
+    margin-top: 25px;
 
-    padding: 16px;
+    padding: 17px;
 
     border: none;
 
     border-radius: 14px;
 
-    background:
-        linear-gradient(
-            135deg,
-            #f59e0b,
-            #fbbf24
-        );
+    background: #ffd43b;
 
-    color: #111827;
+    color: #07152e;
 
-    font-size: 17px;
+    font-size: 18px;
 
-    font-weight: 800;
+    font-weight: bold;
 
     cursor: pointer;
 
-    transition:
-        transform 0.2s,
-        box-shadow 0.2s;
+    transition: 0.2s;
 }
 
-
-.generate-btn:hover {
-
-    transform:
-        translateY(-2px);
-
-    box-shadow:
-        0 12px 30px
-        rgba(245,158,11,0.25);
+button:hover {
+    transform: translateY(-2px);
+    background: #ffe477;
 }
 
-
-.generate-btn:disabled {
-
-    opacity: 0.65;
-
+button:disabled {
+    opacity: 0.6;
     cursor: wait;
-
-    transform: none;
 }
-
-
-/* =========================================================
-   LOADING
-========================================================= */
 
 .loading {
-
     display: none;
-
     text-align: center;
-
-    padding: 30px;
+    margin: 25px 0;
+    color: #ffd43b;
 }
-
-
-.spinner {
-
-    width: 42px;
-
-    height: 42px;
-
-    border:
-        4px solid
-        #334155;
-
-    border-top-color:
-        #f59e0b;
-
-    border-radius: 50%;
-
-    animation:
-        spin 1s linear infinite;
-
-    margin:
-        0 auto 15px;
-}
-
-
-@keyframes spin {
-
-    to {
-        transform: rotate(360deg);
-    }
-
-}
-
-
-/* =========================================================
-   STORY RESULT
-========================================================= */
 
 .result {
-
+    margin-top: 35px;
     display: none;
 }
 
-
-.mood-badge {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    gap: 8px;
-
-    background:
-        rgba(245,158,11,0.12);
-
-    border:
-        1px solid
-        rgba(245,158,11,0.35);
-
-    color: #fbbf24;
-
-    padding: 8px 14px;
-
-    border-radius: 999px;
-
-    font-size: 14px;
-
-    font-weight: 700;
-
+.story-title {
+    color: #ffd43b;
+    font-size: 30px;
     margin-bottom: 15px;
 }
 
-
-.story-title {
-
-    font-family:
-        Georgia,
-        serif;
-
-    font-size: 38px;
-
-    line-height: 1.2;
-
-    color: #fbbf24;
-
-    margin:
-        0 0 22px;
+.story {
+    white-space: pre-wrap;
+    line-height: 1.8;
+    font-size: 17px;
+    color: #f3f6ff;
 }
 
-
-/* =========================================================
-   IMAGE
-========================================================= */
-
-.image-wrapper {
-
-    width: 100%;
-
-    overflow: hidden;
-
-    border-radius: 20px;
-
-    margin-bottom: 30px;
-
-    background: #0f172a;
-
-    border:
-        1px solid
-        rgba(255,255,255,0.08);
+.image-section {
+    margin-top: 35px;
 }
 
+.image-section h2 {
+    color: #ffd43b;
+}
 
 .story-image {
-
     width: 100%;
-
+    max-width: 100%;
+    border-radius: 18px;
     display: block;
-
-    max-height: 620px;
-
-    object-fit: cover;
+    margin-top: 15px;
+    box-shadow: 0 15px 50px rgba(0,0,0,0.45);
 }
-
-
-/* =========================================================
-   STORY TEXT
-========================================================= */
-
-.story-text {
-
-    max-width: 850px;
-
-    margin: auto;
-
-    font-family:
-        Georgia,
-        "Times New Roman",
-        serif;
-
-    font-size: 19px;
-
-    line-height: 1.9;
-
-    color: #e5e7eb;
-}
-
-
-.story-text p {
-
-    margin:
-        0 0 20px;
-}
-
-
-.divider {
-
-    height: 1px;
-
-    background:
-        linear-gradient(
-            90deg,
-            transparent,
-            #475569,
-            transparent
-        );
-
-    margin:
-        30px 0;
-}
-
-
-/* =========================================================
-   ERROR
-========================================================= */
 
 .error {
-
-    display: none;
-
-    background:
-        rgba(127,29,29,0.35);
-
-    border:
-        1px solid
-        rgba(248,113,113,0.4);
-
-    color: #fecaca;
-
-    padding: 16px;
-
+    background: rgba(255, 70, 70, 0.15);
+    border: 1px solid rgba(255, 100, 100, 0.4);
+    padding: 15px;
     border-radius: 12px;
-
+    color: #ffb3b3;
     margin-top: 20px;
-
-    line-height: 1.6;
+    display: none;
 }
-
-
-/* =========================================================
-   FOOTER
-========================================================= */
 
 .footer {
-
     text-align: center;
-
-    color: #64748b;
-
-    padding:
-        20px;
-
-    font-size: 14px;
+    margin-top: 40px;
+    color: #9eacce;
 }
 
-
-/* =========================================================
-   RESPONSIVE
-========================================================= */
-
-@media(max-width: 750px) {
+@media(max-width: 800px) {
 
     .form-grid {
-
         grid-template-columns: 1fr;
     }
 
-    .field.full {
-
-        grid-column:
-            auto;
-    }
-
-    .header h1 {
-
+    h1 {
         font-size: 32px;
     }
 
-    .story-title {
-
-        font-size: 30px;
+    .full {
+        grid-column: auto;
     }
-
-    .story-text {
-
-        font-size: 17px;
-    }
-
-    .card {
-
-        padding: 20px;
-    }
-
 }
 
 </style>
@@ -1021,527 +423,291 @@ textarea {
 
 <body>
 
+<div class="container">
 
-<header class="header">
+    <div class="hero">
 
-    <div class="logo">
-        📖✨
+        <div class="hero-icon">📖✨</div>
+
+        <h1>Mood-to-Story AI</h1>
+
+        <div class="subtitle">
+            Transform your mood and imagination into a magical illustrated story.
+        </div>
+
     </div>
 
-    <h1>
-        Mood-to-Story AI
-    </h1>
 
-    <p>
-        Transform your mood and imagination
-        into a magical illustrated story.
-    </p>
+    <div class="card">
 
-</header>
+        <div class="form-grid">
 
+            <div>
 
-<main class="container">
+                <label>🎭 Choose Your Mood</label>
 
+                <select id="mood">
 
-<!-- =====================================================
-     INPUT CARD
-===================================================== -->
+                    <option>Happy</option>
+                    <option>Sad</option>
+                    <option>Excited</option>
+                    <option>Peaceful</option>
+                    <option>Romantic</option>
+                    <option>Mysterious</option>
+                    <option>Scared</option>
+                    <option>Angry</option>
+                    <option>Hopeful</option>
+                    <option>Adventurous</option>
 
-<section class="card">
+                </select>
 
-    <div class="form-grid">
-
-
-        <div class="field">
-
-            <label>
-                🎭 Choose Your Mood
-            </label>
-
-            <select id="mood">
-
-                <option>Happy</option>
-
-                <option>Sad</option>
-
-                <option>Excited</option>
-
-                <option>Peaceful</option>
-
-                <option>Romantic</option>
-
-                <option>Mysterious</option>
-
-                <option>Scared</option>
-
-                <option>Angry</option>
-
-                <option>Hopeful</option>
-
-                <option>Adventurous</option>
-
-            </select>
-
-        </div>
+            </div>
 
 
-        <div class="field">
+            <div>
 
-            <label>
-                📚 Choose Genre
-            </label>
+                <label>📚 Choose Genre</label>
 
-            <select id="genre">
+                <select id="genre">
 
-                <option>Fantasy</option>
+                    <option>Fantasy</option>
+                    <option>Adventure</option>
+                    <option>Mystery</option>
+                    <option>Comedy</option>
+                    <option>Romance</option>
+                    <option>Science Fiction</option>
+                    <option>Horror</option>
+                    <option>Friendship</option>
+                    <option>Inspirational</option>
 
-                <option>Adventure</option>
+                </select>
 
-                <option>Mystery</option>
+            </div>
 
-                <option>Comedy</option>
 
-                <option>Romance</option>
+            <div>
 
-                <option>Science Fiction</option>
+                <label>🎨 Illustration Style</label>
 
-                <option>Horror</option>
+                <select id="style">
 
-                <option>Friendship</option>
+                    <option>Cinematic Storybook</option>
+                    <option>Disney-like Cartoon</option>
+                    <option>Watercolor Storybook</option>
+                    <option>Fantasy Digital Art</option>
+                    <option>Anime Storybook</option>
+                    <option>3D Animated Story</option>
 
-                <option>Inspirational</option>
+                </select>
 
-            </select>
+            </div>
+
+
+            <div class="full">
+
+                <label>
+                    💡 What should your story be about?
+                </label>
+
+                <textarea id="idea"
+                    placeholder="Example: A student discovers a magical library where every book he reads turns into reality. Use simple words."></textarea>
+
+            </div>
 
         </div>
 
 
-        <div class="field">
+        <button id="generateBtn"
+                onclick="generateStory()">
 
-            <label>
-                🎨 Illustration Style
-            </label>
+            ✨ Create My Story
 
-            <select id="style">
+        </button>
 
-                <option>
-                    Cinematic Storybook
-                </option>
 
-                <option>
-                    Colorful Children's Book
-                </option>
+        <div class="loading" id="loading">
 
-                <option>
-                    Anime
-                </option>
-
-                <option>
-                    Watercolor
-                </option>
-
-                <option>
-                    Fantasy Art
-                </option>
-
-                <option>
-                    3D Animated
-                </option>
-
-            </select>
+            ✨ Creating your story and magical illustration...
+            <br>
+            <br>
+            This may take a little while.
 
         </div>
 
 
-        <div class="field full">
+        <div class="error" id="error"></div>
 
-            <label>
-                💡 What should your story be about?
-            </label>
 
-            <textarea
-                id="idea"
-                placeholder="Example: A student discovers a magical library where every book he reads turns into reality. Use simple words."
-            ></textarea>
+        <div class="result" id="result">
+
+            <div id="moodLabel"></div>
+
+            <div class="story-title" id="storyTitle"></div>
+
+            <div class="story" id="storyText"></div>
+
+
+            <div class="image-section">
+
+                <h2>🎨 Story Illustration</h2>
+
+                <img id="storyImage"
+                     class="story-image"
+                     alt="AI generated story illustration">
+
+            </div>
 
         </div>
 
     </div>
 
 
-    <button
-        class="generate-btn"
-        id="generateBtn"
-        onclick="generateStory()"
-    >
+    <div class="footer">
 
-        ✨ Create My Story
+        Mood-to-Story AI • Powered by Gemini ✨
 
-    </button>
-
-
-    <div
-        class="error"
-        id="error"
-    ></div>
-
-
-</section>
-
-
-<!-- =====================================================
-     LOADING
-===================================================== -->
-
-<div
-    class="card loading"
-    id="loading"
->
-
-    <div class="spinner"></div>
-
-    <strong>
-        Creating your magical story...
-    </strong>
-
-    <p>
-        Gemini is writing your story
-        and creating its illustration.
-    </p>
+    </div>
 
 </div>
 
 
-<!-- =====================================================
-     RESULT
-===================================================== -->
-
-<section
-    class="card result"
-    id="result"
->
-
-    <div
-        class="mood-badge"
-        id="moodBadge"
-    ></div>
-
-
-    <h2
-        class="story-title"
-        id="storyTitle"
-    ></h2>
-
-
-    <div
-        class="image-wrapper"
-        id="imageWrapper"
-    >
-
-        <img
-            class="story-image"
-            id="storyImage"
-            alt="AI generated story illustration"
-        >
-
-    </div>
-
-
-    <div class="divider"></div>
-
-
-    <article
-        class="story-text"
-        id="storyText"
-    ></article>
-
-</section>
-
-
-</main>
-
-
-<footer class="footer">
-
-    Mood-to-Story AI
-    • Powered by Gemini
-
-</footer>
-
-
 <script>
 
-
-// ========================================================
-// GENERATE STORY
-// ========================================================
-
 async function generateStory() {
-
 
     const mood =
         document.getElementById("mood").value;
 
-
     const genre =
         document.getElementById("genre").value;
-
 
     const style =
         document.getElementById("style").value;
 
-
     const idea =
-        document.getElementById("idea").value;
+        document.getElementById("idea").value.trim();
+
+
+    if (!idea) {
+
+        alert("Please enter a story idea.");
+
+        return;
+    }
 
 
     const button =
         document.getElementById("generateBtn");
 
-
     const loading =
         document.getElementById("loading");
-
 
     const result =
         document.getElementById("result");
 
-
-    const error =
+    const errorBox =
         document.getElementById("error");
 
 
-    // Reset UI
-
-    error.style.display = "none";
-
-    result.style.display = "none";
+    button.disabled = true;
 
     loading.style.display = "block";
 
-    button.disabled = true;
+    result.style.display = "none";
 
-    button.innerHTML =
-        "⏳ Creating Your Story...";
+    errorBox.style.display = "none";
 
 
     try {
 
+        const response = await fetch("/generate", {
 
-        const body =
-            new URLSearchParams();
+            method: "POST",
 
+            headers: {
+                "Content-Type": "application/json"
+            },
 
-        body.append(
-            "mood",
-            mood
-        );
+            body: JSON.stringify({
 
+                mood: mood,
+                genre: genre,
+                style: style,
+                idea: idea
 
-        body.append(
-            "genre",
-            genre
-        );
+            })
 
-
-        body.append(
-            "style",
-            style
-        );
-
-
-        body.append(
-            "idea",
-            idea
-        );
-
-
-        const response =
-            await fetch(
-                "/generate",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/x-www-form-urlencoded"
-                    },
-
-                    body: body
-                }
-            );
+        });
 
 
         const data =
             await response.json();
 
 
-        if (!response.ok ||
-            !data.success) {
+        if (!response.ok) {
 
             throw new Error(
-                data.error ||
-                "Something went wrong."
+                data.detail || "Something went wrong."
             );
+
         }
 
 
-        // ==================================================
-        // TITLE
-        // ==================================================
+        document.getElementById("moodLabel").innerHTML =
+            "😊 Mood: " + data.mood;
 
-        document.getElementById(
-            "storyTitle"
-        ).textContent =
+
+        document.getElementById("storyTitle").innerText =
             data.title;
 
 
-        // ==================================================
-        // MOOD
-        // ==================================================
-
-        document.getElementById(
-            "moodBadge"
-        ).textContent =
-            `${data.emoji} Mood: ${data.mood}`;
+        document.getElementById("storyText").innerText =
+            data.story;
 
 
-        // ==================================================
-        // STORY
-        // ==================================================
+        // IMPORTANT:
+        // Display Gemini-generated image
 
-        const storyText =
-            document.getElementById(
-                "storyText"
-            );
-
-
-        // Escape HTML for safety
-
-        const safeStory =
-            escapeHtml(data.story);
+        document.getElementById("storyImage").src =
+            "data:" +
+            data.image_mime +
+            ";base64," +
+            data.image;
 
 
-        // Convert paragraphs to <p>
-
-        storyText.innerHTML =
-            safeStory
-                .split(/\n\s*\n/)
-                .filter(
-                    p => p.trim()
-                )
-                .map(
-                    p =>
-                        `<p>${p.trim()}</p>`
-                )
-                .join("");
+        result.style.display = "block";
 
 
-        // ==================================================
-        // IMAGE
-        // ==================================================
-
-        const imageWrapper =
-            document.getElementById(
-                "imageWrapper"
-            );
-
-
-        const image =
-            document.getElementById(
-                "storyImage"
-            );
-
-
-        if (data.image) {
-
-            image.src =
-                `data:${data.mime};base64,${data.image}`;
-
-            image.alt =
-                `${data.mood} story illustration`;
-
-            imageWrapper.style.display =
-                "block";
-
-        } else {
-
-            imageWrapper.style.display =
-                "none";
-
-            console.warn(
-                "Image was not generated:",
-                data.image_error
-            );
-        }
-
-
-        // ==================================================
-        // SHOW RESULT
-        // ==================================================
-
-        result.style.display =
-            "block";
-
+        // Scroll to result
 
         result.scrollIntoView({
-            behavior: "smooth",
-            block: "start"
+            behavior: "smooth"
         });
 
+    }
 
-    } catch (err) {
+    catch(error) {
 
+        console.error(error);
 
-        console.error(err);
+        errorBox.innerText =
+            "❌ " + error.message;
 
+        errorBox.style.display = "block";
 
-        error.innerHTML =
-            `<strong>⚠️ Generation Error</strong><br><br>
-             ${escapeHtml(err.message)}`;
+    }
 
+    finally {
 
-        error.style.display =
-            "block";
+        button.disabled = false;
 
-
-    } finally {
-
-
-        loading.style.display =
-            "none";
-
-
-        button.disabled =
-            false;
-
-
-        button.innerHTML =
-            "✨ Create My Story";
+        loading.style.display = "none";
 
     }
 
 }
 
-
-// ========================================================
-// ESCAPE HTML
-// ========================================================
-
-function escapeHtml(text) {
-
-    const div =
-        document.createElement("div");
-
-    div.textContent =
-        text;
-
-    return div.innerHTML;
-}
-
-
 </script>
-
 
 </body>
 
@@ -1549,149 +715,139 @@ function escapeHtml(text) {
 """
 
 
-# ============================================================
-# HOME
-# ============================================================
-
-@app.get(
-    "/",
-    response_class=HTMLResponse
-)
-def home():
-
-    return HTML
-
-
-# ============================================================
+# =========================================================
 # GENERATE ENDPOINT
-# ============================================================
+# =========================================================
 
 @app.post("/generate")
-def generate(
-
-    mood: str = Form(...),
-
-    genre: str = Form(...),
-
-    style: str = Form(...),
-
-    idea: str = Form("")
-
-):
+def generate(request: StoryRequest):
 
     try:
 
-        # ----------------------------------------------------
-        # STORY
-        # ----------------------------------------------------
+        print("Generating story...")
 
-        raw_story = make_story(
-            mood,
-            genre,
-            idea
+        print("Mood:", request.mood)
+        print("Genre:", request.genre)
+        print("Style:", request.style)
+
+
+        # ---------------------------------------------
+        # Generate story
+        # ---------------------------------------------
+
+        story = make_story(
+            request.mood,
+            request.genre,
+            request.idea
         )
 
 
-        title, story = clean_story(
-            raw_story
+        print("Story generated successfully.")
+
+
+        # ---------------------------------------------
+        # Generate image
+        # ---------------------------------------------
+
+        print("Generating illustration...")
+
+        image = make_image(
+            request.mood,
+            request.genre,
+            request.style,
+            request.idea,
+            story
         )
 
 
-        # ----------------------------------------------------
-        # IMAGE
-        # ----------------------------------------------------
-
-        image = None
-
-        mime = "image/png"
-
-        image_error = None
+        print("Illustration generated successfully.")
 
 
-        image, mime, image_error = make_image(
-            story,
-            mood,
-            genre,
-            style
-        )
+        # ---------------------------------------------
+        # Extract title
+        # ---------------------------------------------
+
+        lines = [
+            line.strip()
+            for line in story.splitlines()
+            if line.strip()
+        ]
 
 
-        # ----------------------------------------------------
-        # MOOD
-        # ----------------------------------------------------
+        title = "Your Magical Story"
 
-        mood_config = MOOD_CONFIG.get(
-            mood,
-            MOOD_CONFIG["Happy"]
-        )
+        if lines:
 
+            first_line = lines[0]
 
-        # ----------------------------------------------------
-        # RESPONSE
-        # ----------------------------------------------------
+            first_line = first_line.replace(
+                "#", ""
+            ).strip()
+
+            if len(first_line) < 100:
+
+                title = first_line
+
+                story_without_title = "\n".join(
+                    lines[1:]
+                )
+
+            else:
+
+                story_without_title = story
+
+        else:
+
+            story_without_title = story
+
 
         return JSONResponse({
 
             "success": True,
 
+            "mood": request.mood,
+
+            "genre": request.genre,
+
+            "style": request.style,
+
             "title": title,
 
-            "story": story,
+            "story": story_without_title,
 
-            "mood": mood,
+            "image": image["base64"],
 
-            "genre": genre,
-
-            "style": style,
-
-            "emoji":
-                mood_config["emoji"],
-
-            "image": image,
-
-            "mime":
-                mime,
-
-            "image_error":
-                image_error
+            "image_mime": image["mime_type"]
 
         })
 
 
     except Exception as e:
 
-        print(
-            "GENERATION ERROR:",
-            repr(e)
-        )
+        print("\nERROR:")
+        traceback.print_exc()
 
         return JSONResponse(
 
             status_code=500,
 
             content={
-
                 "success": False,
-
-                "error": str(e)
-
+                "detail": str(e)
             }
 
         )
 
 
-# ============================================================
+# =========================================================
 # HEALTH CHECK
-# ============================================================
+# =========================================================
 
 @app.get("/health")
 def health():
 
     return {
-
         "status": "healthy",
-
-        "service":
-            "Mood-to-Story AI"
-
+        "text_model": TEXT_MODEL,
+        "image_model": IMAGE_MODEL
     }
