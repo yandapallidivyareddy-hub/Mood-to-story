@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 GOOGLE_API_KEY=os.getenv("GOOGLE_API_KEY")
-llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash",google_api_key=GOOGLE_API_KEY,temperature=0)
+llm=ChatGoogleGenerativeAI(model="gemini-3.6-flash",google_api_key=GOOGLE_API_KEY,temperature=0)
 img_client=genai.Client(api_key=GOOGLE_API_KEY)
 app=FastAPI(title="Mood-to-Story AI")
 
